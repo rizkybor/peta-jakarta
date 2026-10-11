@@ -2,11 +2,13 @@
 
 Usage: python -I render.py <jakarta.json> <out_prefix>
                            [--transjakarta transjakarta.json] [--mrt mrt.json]
-                           [--stations stations.json]
+                           [--stations stations.json] [--style transit]
 Writes <out_prefix>.pdf (vector) and <out_prefix>.png (300 dpi preview).
 --transjakarta (from extract_transjakarta.py) highlights the BRT corridors and
 halte; --mrt (from extract_mrt.py) adds the MRT Jakarta line and stations;
 --stations (from extract_stations.py) adds KRL / KAI railway stations.
+--style transit gives a transit-diagram look: roads faded to grey, rail,
+busway and MRT drawn bold on top.
 """
 import argparse
 import json
@@ -31,6 +33,7 @@ ap.add_argument("prefix")
 ap.add_argument("--transjakarta")
 ap.add_argument("--mrt")
 ap.add_argument("--stations")
+ap.add_argument("--style", choices=("default", "transit"), default="default")
 args = ap.parse_args()
 PREFIX = args.prefix
 data = json.load(open(args.src))
@@ -39,6 +42,7 @@ mrt = json.load(open(args.mrt)) if args.mrt else None
 krl = json.load(open(args.stations))["stations"] if args.stations else None
 KRL_COLOUR = "#3b3b3b"
 TJ_BLUE = "#1f3b70"
+TRANSIT = args.style == "transit"
 
 # Map extent (mainland Jakarta + small margin). The latitude span is chosen so
 # the 277 mm map height prints at exactly 1:SCALE on A3.
@@ -82,6 +86,26 @@ ROAD = {
     "motorway_link":  ("#a83a32", "#e8786b", 1.2, 0.8, 7),
     "motorway":       ("#a83a32", "#e8786b", 2.8, 2.0, 7),
 }
+# Line widths (casing, line) and marker sizes for the transit layers
+TJ_W, MRT_W, RAIL_W = (3.4, 2.1), (5.2, 3.4), (1.2, 0.6)
+HALTE_S, MRT_S, KRL_S = (7, 16), 24, (20, 42)
+LABEL_ROADS = ["trunk", "primary", "secondary"]
+
+
+def tint(hex_colour, t):
+    """Blend a #rrggbb colour toward white by fraction t."""
+    rgb = [int(hex_colour[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(c + (255 - c) * t):02x}" for c in rgb)
+
+
+if TRANSIT:
+    C.update(bg="#f4f4f2", sea="#dbe7ee", coast="#a8c2d2", river="#c6dae6", border="#9d9ba3")
+    KOTA_FILL = {k: tint(v, 0.6) for k, v in KOTA_FILL.items()}
+    ROAD = {k: ("#c4c3be" if k.startswith(("motorway", "trunk")) else "#d6d5d1", "#ffffff",
+                cw * 0.85, fw * 0.85, z) for k, (_, _, cw, fw, z) in ROAD.items()}
+    TJ_W, MRT_W, RAIL_W = (5.2, 3.4), (7.6, 5.2), (4.2, 2.6)
+    HALTE_S, MRT_S, KRL_S = (11, 26), 40, (30, 62)
+    LABEL_ROADS = ["trunk"]
 
 
 def rings_to_polys(lines):
@@ -146,11 +170,17 @@ for a in data["admin"]:
 rivers = [w["c"] for w in data["ways"] if w["k"] == "river"]
 ax.add_collection(LineCollection(rivers, colors=C["river"], linewidths=0.6, zorder=2.2))
 
-# --- Railways (black/white dashed)
+# --- Railways (black/white dashed; transit style: solid line with white casing)
 rail = [w["c"] for w in data["ways"] if w["k"] == "rail"]
-ax.add_collection(LineCollection(rail, colors="#555555", linewidths=1.2, zorder=8))
-ax.add_collection(LineCollection(rail, colors="white", linewidths=0.6,
-                                 linestyles=(0, (3, 3)), zorder=8.1))
+if TRANSIT:
+    ax.add_collection(LineCollection(rail, colors="white", linewidths=RAIL_W[0],
+                                     capstyle="round", joinstyle="round", zorder=8))
+    ax.add_collection(LineCollection(rail, colors=KRL_COLOUR, linewidths=RAIL_W[1],
+                                     capstyle="round", joinstyle="round", zorder=8.1))
+else:
+    ax.add_collection(LineCollection(rail, colors="#555555", linewidths=RAIL_W[0], zorder=8))
+    ax.add_collection(LineCollection(rail, colors="white", linewidths=RAIL_W[1],
+                                     linestyles=(0, (3, 3)), zorder=8.1))
 
 # --- Roads: casing pass then fill pass, by class
 by_kind = defaultdict(list)
@@ -167,30 +197,30 @@ for k, (case, fill, cw, fw, z) in ROAD.items():
 # --- TransJakarta BRT corridors (white casing, then corridor colour) and halte
 if tj:
     for r in reversed(tj["routes"]):
-        ax.add_collection(LineCollection(r["lines"], colors="white", linewidths=3.4,
+        ax.add_collection(LineCollection(r["lines"], colors="white", linewidths=TJ_W[0],
                                          capstyle="round", joinstyle="round", zorder=9))
     for r in reversed(tj["routes"]):
-        ax.add_collection(LineCollection(r["lines"], colors=r["colour"], linewidths=2.1,
+        ax.add_collection(LineCollection(r["lines"], colors=r["colour"], linewidths=TJ_W[1],
                                          capstyle="round", joinstyle="round", zorder=9.5))
     single = [h["c"] for h in tj["halte"] if len(h["refs"]) == 1]
     multi = [h["c"] for h in tj["halte"] if len(h["refs"]) > 1]
     if single:
-        ax.scatter(*zip(*single), s=7, c="white", edgecolors=TJ_BLUE, linewidths=0.6, zorder=12)
+        ax.scatter(*zip(*single), s=HALTE_S[0], c="white", edgecolors=TJ_BLUE, linewidths=0.6, zorder=12)
     if multi:
-        ax.scatter(*zip(*multi), s=16, c="white", edgecolors="black", linewidths=1.0, zorder=12.1)
+        ax.scatter(*zip(*multi), s=HALTE_S[1], c="white", edgecolors="black", linewidths=1.0, zorder=12.1)
 
 # --- MRT Jakarta: line (white casing + line colour) and stations
 if mrt:
-    ax.add_collection(LineCollection(mrt["lines"], colors="white", linewidths=5.2,
+    ax.add_collection(LineCollection(mrt["lines"], colors="white", linewidths=MRT_W[0],
                                      capstyle="round", joinstyle="round", zorder=10.4))
-    ax.add_collection(LineCollection(mrt["lines"], colors=mrt["colour"], linewidths=3.4,
+    ax.add_collection(LineCollection(mrt["lines"], colors=mrt["colour"], linewidths=MRT_W[1],
                                      capstyle="round", joinstyle="round", zorder=10.5))
-    ax.scatter(*zip(*[st["c"] for st in mrt["stations"]]), marker="s", s=24, c="white",
+    ax.scatter(*zip(*[st["c"] for st in mrt["stations"]]), marker="s", s=MRT_S, c="white",
                edgecolors=mrt["colour"], linewidths=1.5, zorder=13)
 
 # --- Railway stations (KRL / KAI): dark disc with white ring, larger for terminals
 if krl:
-    for major, size in ((False, 20), (True, 42)):
+    for major, size in zip((False, True), KRL_S):
         pts = [st["c"] for st in krl if st["major"] == major]
         if pts:
             ax.scatter(*zip(*pts), s=size, c=KRL_COLOUR, edgecolors="white",
@@ -273,7 +303,8 @@ def label_roads(classes):
                 label = short_name(name)
                 if try_label(pt.x, pt.y, label, rot=ang, size=font[k],
                              weight="bold" if k in ("motorway", "trunk") else "normal",
-                             color="#7a2620" if k == "motorway" else C["text"]):
+                             color=C["muted"] if TRANSIT else
+                             "#7a2620" if k == "motorway" else C["text"]):
                     seen_names[name].append(pt)
                     break
 
@@ -342,7 +373,7 @@ if tj:
                          color=TJ_BLUE, weight="bold" if big else "normal", halo=1.3,
                          z=21, pad=0.5, ha=ha, va=va, dx=dx, dy=dy):
                 break
-label_roads(["trunk", "primary", "secondary"])
+label_roads(LABEL_ROADS)
 
 # Place names (districts / neighbourhoods)
 for t, size in (("city_district", 6.2), ("suburb", 4.8), ("quarter", 4.2)):
@@ -452,8 +483,11 @@ for k, label in legend_rows:
     side.add_line(Line2D([0, 0.16], [y, y], color=fill, lw=fw * 2.2, solid_capstyle="butt"))
     side.text(0.21, y, label, fontsize=8.5, va="center")
     y -= ROW
-side.add_line(Line2D([0, 0.16], [y, y], color="#555555", lw=2.6))
-side.add_line(Line2D([0, 0.16], [y, y], color="white", lw=1.3, linestyle=(0, (3, 3))))
+if TRANSIT:
+    side.add_line(Line2D([0, 0.16], [y, y], color=KRL_COLOUR, lw=3.6, solid_capstyle="butt"))
+else:
+    side.add_line(Line2D([0, 0.16], [y, y], color="#555555", lw=2.6))
+    side.add_line(Line2D([0, 0.16], [y, y], color="white", lw=1.3, linestyle=(0, (3, 3))))
 side.text(0.21, y, "Rel kereta api (KRL / KA)", fontsize=8.5, va="center")
 y -= ROW
 if krl:
