@@ -83,7 +83,15 @@ python3 -m venv .venv
 
    Opsi `--scale 100000` mencetak peta orienteering pada skala 1 : 100.000.
    Bidang peta dilebarkan menjadi 296 mm, sehingga pinggiran Jakarta (terutama
-   ujung selatan) sedikit terpotong.
+   ujung selatan) sedikit terpotong. Tambahkan `--rail-symbol` agar rel kereta
+   memakai simbol rel ISOM 515 (garis dengan bantalan melintang) alih-alih garis
+   abu tebal; jalur rel ganda / paralel digambar satu garis per koridor.
+
+   ```bash
+   .venv/bin/python render_orienteering.py jakarta.json output/peta-jalan-jakarta-a3-orienteering-transit-100k \
+       --landcover landcover.json --stations stations.json \
+       --transjakarta transjakarta.json --mrt mrt.json --scale 100000 --rail-symbol
+   ```
 
 `fetch_overpass.py` adalah alternatif langkah 1–2 (tanpa busway) lewat Overpass API, tapi
 server Overpass sering timeout untuk area sebesar Jakarta.

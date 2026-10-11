@@ -5,7 +5,7 @@ Usage: python -I render_orienteering.py <jakarta.json> <out_prefix>
                                         [--landcover landcover.json]
                                         [--stations stations.json]
                                         [--transjakarta transjakarta.json] [--mrt mrt.json]
-                                        [--scale 100000]
+                                        [--scale 100000] [--rail-symbol]
 Writes <out_prefix>.pdf (vector) and <out_prefix>.png (300 dpi preview).
 --landcover (from extract_landcover.py) adds open land, vegetation, water and
 restricted areas; --stations (from extract_stations.py) adds KRL / KAI railway stations.
@@ -13,6 +13,8 @@ restricted areas; --stations (from extract_stations.py) adds KRL / KAI railway s
 orienteering base, drawn bold like render.py --style transit (rail too).
 --scale (default 125000) sets the print scale on A3; at larger scales such as
 1:100.000 the map frame widens to 296 mm and the edges of Jakarta are cropped.
+--rail-symbol keeps the railway track symbol (line with cross ticks) when the
+transit layers are on, drawn bold with a white casing.
 """
 import argparse
 import json
@@ -39,6 +41,7 @@ ap.add_argument("--stations")
 ap.add_argument("--transjakarta")
 ap.add_argument("--mrt")
 ap.add_argument("--scale", type=int, default=125_000)
+ap.add_argument("--rail-symbol", action="store_true")
 args = ap.parse_args()
 PREFIX = args.prefix
 data = json.load(open(args.src))
@@ -48,6 +51,8 @@ tj = json.load(open(args.transjakarta)) if args.transjakarta else None
 mrt = json.load(open(args.mrt)) if args.mrt else None
 TRANSIT = bool(tj or mrt)
 KRL_COLOUR = "#3b3b3b"
+AUTHOR = "Rizky A Kurniawan, Oktober 2026"
+DRAWN_WITH = "Python (matplotlib, Shapely, pyosmium)"
 TJ_BLUE = "#1f3b70"
 
 plt.rcParams["font.family"] = ["Arial", "Helvetica", "DejaVu Sans"]
@@ -180,7 +185,30 @@ for k, (bw, fw, z) in ROAD.items():
 # --- Railway (ISOM 515: black line with cross ticks; with transit layers the
 # line is drawn bold with a white casing, as in render.py --style transit)
 rail = [w["c"] for w in data["ways"] if w["k"] == "rail"]
-if TRANSIT:
+RAIL_TRACK = (1.4, 5.2, (0, (0.45, 3.6)))   # line width, tick length, tick dashes (pt)
+
+
+def single_track(lines, tol=0.00025):
+    """Drop rail ways that run alongside an already kept one (double / parallel
+    tracks), so the cross ticks of neighbouring tracks don't merge into blobs."""
+    kept, cover = [], None
+    for ls in sorted((LineString(l) for l in lines), key=lambda g: -g.length):
+        if cover is not None and ls.intersection(cover).length > 0.6 * ls.length:
+            continue
+        kept.append(list(ls.coords))
+        cover = ls.buffer(tol) if cover is None else cover.union(ls.buffer(tol))
+    return kept
+
+
+if TRANSIT and args.rail_symbol:
+    lw, tick, dashes = RAIL_TRACK
+    rail = single_track(rail)
+    ax.add_collection(LineCollection(rail, colors="white", linewidths=tick + 1.6,
+                                     capstyle="round", joinstyle="round", zorder=8))
+    ax.add_collection(LineCollection(rail, colors=I["black"], linewidths=lw, zorder=8.1))
+    ax.add_collection(LineCollection(rail, colors=I["black"], linewidths=tick,
+                                     linestyles=dashes, zorder=8.1))
+elif TRANSIT:
     ax.add_collection(LineCollection(rail, colors="white", linewidths=4.2, capstyle="round",
                                      joinstyle="round", zorder=8))
     ax.add_collection(LineCollection(rail, colors=KRL_COLOUR, linewidths=2.6, capstyle="round",
@@ -397,14 +425,12 @@ side = fig.add_axes([sx0, 10 / 297, 1 - sx0 - margin, map_h])
 side.axis("off")
 side.set_xlim(0, 1)
 side.set_ylim(0, 1)
-side.text(0, 0.985, "PETA ORIENTEERING" + (" & TRANSPORTASI" if TRANSIT else ""),
-          fontsize=17 if TRANSIT else 19, weight="bold", va="top")
-side.text(0, 0.935, "DKI JAKARTA", fontsize=26, weight="bold", color=I["brown"], va="top")
-side.text(0, 0.872, "Simbologi ISOM 2017 (gaya OCAD / OpenOrienteering Mapper)"
-          + ("\ndengan kereta api" + (", busway TransJakarta" if tj else "")
-             + (" & MRT Jakarta" if mrt else "") if TRANSIT else ""),
-          fontsize=8.5, color="#555555", va="top", linespacing=1.4)
-TOP = 0.835 if TRANSIT else 0.85
+scale_txt = f"{SCALE:,}".replace(",", ".")
+side.text(0, 0.985, "PETA JAKARTA ORIENTEERING", fontsize=18, weight="bold", va="top")
+side.text(0, 0.94, "DKI JAKARTA", fontsize=26, weight="bold", color=I["brown"], va="top")
+side.text(0, 0.885, f"Skala 1:{scale_txt}", fontsize=11, weight="bold", va="top")
+side.text(0, 0.86, "ISOM 2017, dimodifikasi dan disesuaikan dengan kebutuhan event", fontsize=8.5, color="#555555", va="top")
+TOP = 0.838
 side.plot([0, 1], [TOP, TOP], color=I["black"], lw=0.8)
 
 ROW = 0.0192 if TRANSIT else 0.026
@@ -460,7 +486,12 @@ for k, code, label in (("motorway", "502", "Jalan tol"), ("trunk", "502", "Jalan
     if fw:
         line_sample(color=I["brown50"], lw=fw * 1.6)
     row(code, label)
-if TRANSIT:
+if TRANSIT and args.rail_symbol:
+    lw, tick, dashes = RAIL_TRACK
+    line_sample(color=I["black"], lw=lw)
+    side.add_line(Line2D([0, 0.15], [y, y], color=I["black"], lw=tick, linestyle=dashes))
+    row("515", "Rel kereta api (KRL / KA)")
+elif TRANSIT:
     line_sample(color=KRL_COLOUR, lw=3.6)
     row("", "Rel kereta api (KRL / KA)")
 else:
@@ -494,7 +525,9 @@ if tj:
                   bbox=dict(boxstyle="round,pad=0.3", fc=r["colour"], ec="none"))
         side.text(x0 + 0.065, yy, r["name"], fontsize=6.6, va="center")
 side.text(0, 0.0, f"Skala 1 : {scale_txt} bila dicetak A3 (420 × 297 mm) ukuran asli\n"
-                  "Data peta © kontributor OpenStreetMap (ODbL) · openstreetmap.org/copyright",
+                  "Data peta © kontributor OpenStreetMap (ODbL) · openstreetmap.org/copyright\n"
+                  f"Digambar menggunakan: {DRAWN_WITH}\n"
+                  f"Oleh: {AUTHOR}",
           fontsize=6.5, color="#666666", va="bottom", linespacing=1.5)
 
 # Narrower sidebar (larger scales): shrink its text to fit
