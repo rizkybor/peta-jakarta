@@ -5,7 +5,7 @@ Usage: python -I render_orienteering.py <jakarta.json> <out_prefix>
                                         [--landcover landcover.json]
                                         [--stations stations.json]
                                         [--transjakarta transjakarta.json] [--mrt mrt.json]
-                                        [--scale 100000] [--rail-symbol]
+                                        [--scale 100000] [--rail-symbol] [--isom]
 Writes <out_prefix>.pdf (vector) and <out_prefix>.png (300 dpi preview).
 --landcover (from extract_landcover.py) adds open land, vegetation, water and
 restricted areas; --stations (from extract_stations.py) adds KRL / KAI railway stations.
@@ -15,6 +15,9 @@ orienteering base, drawn bold like render.py --style transit (rail too).
 1:100.000 the map frame widens to 296 mm and the edges of Jakarta are cropped.
 --rail-symbol keeps the railway track symbol (line with cross ticks) when the
 transit layers are on, drawn bold with a white casing.
+--isom follows IOF ISOM 2017-2 (revision January 2024) more strictly: symbol
+codes, colours and line widths in mm, Railway (509), black-edged water (301),
+blue 0.12 mm north lines (601) and north-orientated text.
 """
 import argparse
 import json
@@ -42,6 +45,7 @@ ap.add_argument("--transjakarta")
 ap.add_argument("--mrt")
 ap.add_argument("--scale", type=int, default=125_000)
 ap.add_argument("--rail-symbol", action="store_true")
+ap.add_argument("--isom", action="store_true")
 args = ap.parse_args()
 PREFIX = args.prefix
 data = json.load(open(args.src))
@@ -50,6 +54,7 @@ krl = json.load(open(args.stations))["stations"] if args.stations else None
 tj = json.load(open(args.transjakarta)) if args.transjakarta else None
 mrt = json.load(open(args.mrt)) if args.mrt else None
 TRANSIT = bool(tj or mrt)
+ISOM = args.isom
 KRL_COLOUR = "#3b3b3b"
 AUTHOR = "Rizky A Kurniawan, Oktober 2026"
 DRAWN_WITH = "Python (matplotlib, Shapely, pyosmium)"
@@ -111,6 +116,38 @@ ROAD = {
     "motorway":       (2.8, 1.9, 7),
 }
 
+# --isom: IOF ISOM 2017-2 (rev. January 2024). Dimensions are in mm as printed.
+PT = 72 / 25.4          # points per mm
+RAIL_X = 2              # Railway (509) drawn at 200% so it stands out like the transit lines
+if ISOM:
+    I.update(green30="#c5ffb9", green60="#8bff74", olive="#a6a52b", blue70="#4dbdeb")
+    LC = {
+        "rough":  ("403", I["yellow50"], "Lahan terbuka kasar (padang, sawah, bandara)", 1.30),
+        "open":   ("401", I["yellow"], "Lahan terbuka (taman, lapangan, makam, golf)", 1.31),
+        "forest": ("406", I["green30"], "Vegetasi: lari lambat (hutan kota)", 1.32),
+        "scrub":  ("408", I["green60"], "Vegetasi: jalan kaki (semak, kebun)", 1.33),
+        "oob":    ("520", I["olive"], "Area tidak boleh dimasuki (industri, militer, pelabuhan)",
+                   1.34),
+        "water":  ("301", I["blue"], "Badan air tak terseberangi (danau, waduk, situ)", 1.35),
+    }
+
+    def wide(brown_mm):
+        """502 Wide road: brown 50% infill between two 0.14 mm black edges."""
+        return (brown_mm + 0.28) * PT, brown_mm * PT
+
+    ROAD = {
+        "tertiary":       (0.25 * PT, 0, 3),   # 503 thinned to 0.25 mm (event modification)
+        "secondary_link": (0.35 * PT, 0, 4),   # 503 Road
+        "secondary":      (0.35 * PT, 0, 4),
+        # ramps / links as a thin 503 under the main roads keeps interchanges legible
+        "primary_link":   (0.25 * PT, 0, 2.9),
+        "trunk_link":     (0.25 * PT, 0, 2.9),
+        "motorway_link":  (0.25 * PT, 0, 2.9),
+        "primary":        (*wide(0.3), 5),     # 502 at its minimum width
+        "trunk":          (*wide(0.4), 6),
+        "motorway":       (*wide(0.5), 7),
+    }
+
 fig = plt.figure(figsize=(FIG_W, FIG_H), dpi=100)
 fig.patch.set_facecolor("white")
 margin = 10 * MM / FIG_W
@@ -136,10 +173,15 @@ if coast:
         for g in split(frame, cl).geoms:
             if g.contains(Point(LON_C, N - 0.003)):
                 ax.add_patch(MplPolygon(list(g.exterior.coords), closed=True,
-                                        fc=I["blue50"], ec="none", zorder=0.5))
+                                        fc=I["blue70"] if ISOM else I["blue50"], ec="none",
+                                        zorder=0.5))
     except Exception as e:
         print("sea split failed:", e)
-    ax.add_collection(LineCollection(coast, colors=I["blue"], linewidths=0.9, zorder=1.4))
+    if ISOM:   # 301: dominant water in 70% blue, black bank line = uncrossable
+        ax.add_collection(LineCollection(coast, colors=I["black"], linewidths=0.12 * PT,
+                                         zorder=1.4))
+    else:
+        ax.add_collection(LineCollection(coast, colors=I["blue"], linewidths=0.9, zorder=1.4))
 
 # --- Land cover areas
 by_cat = defaultdict(list)
@@ -149,8 +191,46 @@ for k, (_, fc, _, z) in LC.items():
     if by_cat[k]:
         ax.add_collection(PatchCollection(by_cat[k], fc=fc, ec="none", zorder=z))
 if by_cat["water"]:
-    ax.add_collection(PatchCollection(by_cat["water"], fc="none", ec=I["blue"], lw=0.35,
-                                      zorder=1.36))
+    ax.add_collection(PatchCollection(by_cat["water"], fc="none",
+                                      ec=I["black"] if ISOM else I["blue"],
+                                      lw=0.12 * PT if ISOM else 0.35, zorder=1.36))
+if ISOM and by_cat["oob"]:   # 520: clear borders get a black boundary line
+    ax.add_collection(PatchCollection(by_cat["oob"], fc="none", ec=I["black"], lw=0.18 * PT,
+                                      zorder=1.345))
+
+# --- Generalisation for print (--isom, ISOM 2.6): merge touching pieces into
+# long lines so dash patterns and symbol edges run on unbroken, and drop detail
+# finer than about 0.08 mm on the map.
+def tidy(lines, tol_mm=0.08):
+    if not ISOM:
+        return lines
+    m = linemerge([LineString(l) for l in lines if len(l) > 1])
+    out = []
+    for g in getattr(m, "geoms", [m]):
+        g = g.simplify(tol_mm / KY)
+        if g.length > 0:
+            out.append(list(g.coords))
+    return out
+
+
+def collapse_pairs(ways, gap_mm=0.45):
+    """Dual carriageways are two OSM ways with the same name a few tens of
+    metres apart; keep one so the road symbol is drawn once, not twice."""
+    by_name = defaultdict(list)
+    for w in ways:
+        by_name[w["n"] or id(w)].append(LineString(w["c"]))
+    out = []
+    for segs in by_name.values():
+        m = linemerge(segs)
+        cover = None
+        for g in sorted(getattr(m, "geoms", [m]), key=lambda g: -g.length):
+            if cover is not None and g.intersection(cover).length > 0.6 * g.length:
+                continue
+            out.append(list(g.coords))
+            buf = g.buffer(gap_mm / KY)
+            cover = buf if cover is None else cover.union(buf)
+    return out
+
 
 # --- Boundaries (black dash / dash-dot)
 kota_polys = {}
@@ -159,24 +239,31 @@ for a in data["admin"]:
         polys = list(polygonize(linemerge([LineString(l) for l in a["lines"] if len(l) > 1])))
         if polys:
             kota_polys[a["name"]] = unary_union(polys)
-        ax.add_collection(LineCollection(a["lines"], colors=I["black"], linewidths=0.4,
+        ax.add_collection(LineCollection(tidy(a["lines"]), colors=I["black"], linewidths=0.4,
                                          linestyles=(0, (5, 2.5)), alpha=0.7, zorder=2))
     if a["level"] == "4":
-        ax.add_collection(LineCollection(a["lines"], colors=I["black"], linewidths=1.1,
+        ax.add_collection(LineCollection(tidy(a["lines"]), colors=I["black"], linewidths=1.1,
                                          linestyles=(0, (7, 2, 1.5, 2)), zorder=2.1))
 
 # --- Watercourses (ISOM 304/305: blue line)
-rivers = [w["c"] for w in data["ways"] if w["k"] == "river"]
-ax.add_collection(LineCollection(rivers, colors=I["blue"], linewidths=0.8, zorder=2.2))
+rivers = tidy([w["c"] for w in data["ways"] if w["k"] == "river"])
+ax.add_collection(LineCollection(rivers, colors=I["blue"], linewidths=0.3 * PT if ISOM else 0.8,
+                                 zorder=2.2))   # 304 Crossable watercourse: 0.30 mm
 
 # --- Roads: ISOM 502 wide road (black edges + brown fill) / 503-504 black line
 by_kind = defaultdict(list)
 for w in data["ways"]:
     if w["k"] in ROAD:
-        by_kind[w["k"]].append(w["c"])
+        by_kind[w["k"]].append(w)
+for k in by_kind:
+    if ISOM and k in ("motorway", "trunk", "primary", "secondary"):
+        by_kind[k] = tidy(collapse_pairs(by_kind[k]))
+    else:
+        by_kind[k] = tidy([w["c"] for w in by_kind[k]])
 for k, (bw, fw, z) in ROAD.items():
     ax.add_collection(LineCollection(by_kind[k], colors=I["black"], linewidths=bw,
-                                     capstyle="butt", joinstyle="round", zorder=z))
+                                     capstyle="round" if ISOM else "butt", joinstyle="round",
+                                     zorder=z))
 for k, (bw, fw, z) in ROAD.items():
     if fw:
         ax.add_collection(LineCollection(by_kind[k], colors=I["brown50"], linewidths=fw,
@@ -188,19 +275,42 @@ rail = [w["c"] for w in data["ways"] if w["k"] == "rail"]
 RAIL_TRACK = (1.4, 5.2, (0, (0.45, 3.6)))   # line width, tick length, tick dashes (pt)
 
 
-def single_track(lines, tol=0.00025):
+def single_track(lines, tol=0.00025, share=0.6):
     """Drop rail ways that run alongside an already kept one (double / parallel
     tracks), so the cross ticks of neighbouring tracks don't merge into blobs."""
     kept, cover = [], None
     for ls in sorted((LineString(l) for l in lines), key=lambda g: -g.length):
-        if cover is not None and ls.intersection(cover).length > 0.6 * ls.length:
+        if cover is not None and ls.intersection(cover).length > share * ls.length:
             continue
         kept.append(list(ls.coords))
         cover = ls.buffer(tol) if cover is None else cover.union(ls.buffer(tol))
     return kept
 
 
-if TRANSIT and args.rail_symbol:
+def rail_509(target, x0=None, y0=None, scale=RAIL_X, z=8):
+    """509 Railway: black line 0.45 mm wide (two 0.1 mm edges, 0.35 mm apart)
+    filled alternately black 1.5 mm / white 1.0 mm, with a 0.15 mm white mask."""
+    black, white = 0.45 * scale * PT, 0.25 * scale * PT
+    on, off = 1.0 * scale * PT, 1.5 * scale * PT
+    if x0 is None:
+        target.add_collection(LineCollection(rail, colors="white",
+                                             linewidths=black + 0.3 * scale * PT,
+                                             capstyle="butt", joinstyle="round", zorder=z))
+        target.add_collection(LineCollection(rail, colors=I["black"], linewidths=black,
+                                             capstyle="butt", zorder=z + 0.1))
+        target.add_collection(LineCollection(rail, colors="white", linewidths=white,
+                                             linestyles=(off / white, (on / white, off / white)),
+                                             capstyle="butt", zorder=z + 0.2))
+    else:
+        target.add_line(Line2D(x0, y0, color=I["black"], lw=black, solid_capstyle="butt"))
+        target.add_line(Line2D(x0, y0, color="white", lw=white, dash_capstyle="butt",
+                               linestyle=(off / white, (on / white, off / white))))
+
+
+if ISOM:
+    rail = tidy(single_track(rail, tol=0.8 / KY, share=0.4))   # parallel tracks within ~0.8 mm
+    rail_509(ax)
+elif TRANSIT and args.rail_symbol:
     lw, tick, dashes = RAIL_TRACK
     rail = single_track(rail)
     ax.add_collection(LineCollection(rail, colors="white", linewidths=tick + 1.6,
@@ -220,6 +330,8 @@ else:
 
 # --- TransJakarta corridors (white casing + corridor colour) and halte
 if tj:
+    for r in tj["routes"]:
+        r["lines"] = tidy(r["lines"])
     for r in reversed(tj["routes"]):
         ax.add_collection(LineCollection(r["lines"], colors="white", linewidths=5.2,
                                          capstyle="round", joinstyle="round", zorder=9))
@@ -235,6 +347,7 @@ if tj:
 
 # --- MRT Jakarta line and stations
 if mrt:
+    mrt["lines"] = tidy(mrt["lines"])
     ax.add_collection(LineCollection(mrt["lines"], colors="white", linewidths=7.6,
                                      capstyle="round", joinstyle="round", zorder=10.4))
     ax.add_collection(LineCollection(mrt["lines"], colors=mrt["colour"], linewidths=5.2,
@@ -257,7 +370,8 @@ if krl:
 NL_STEP = 20 / KX
 x = W + NL_STEP / 2
 while x < E:
-    ax.axvline(x, color=I["blue"], lw=0.5, zorder=2.5 if TRANSIT else 15)
+    ax.axvline(x, color=I["blue"], lw=0.12 * PT if ISOM else 0.5,   # 601: 0.12 mm blue
+               zorder=2.5 if TRANSIT else 15)
     ax.annotate("", xy=(x, N - 0.002), xytext=(x, N - 0.012), zorder=15.1,
                 arrowprops=dict(arrowstyle="-|>,head_width=0.18,head_length=0.5",
                                 lw=0.5, color=I["blue"]))
@@ -388,7 +502,7 @@ for k in ("motorway", "trunk") if TRANSIT else ("motorway", "trunk", "primary"):
             b = ln.interpolate(min(frac + 0.02, 1), normalized=True)
             ang = math.degrees(math.atan2((b.y - a.y) * ASPECT, b.x - a.x))
             ang = ang - 180 if ang > 90 else ang + 180 if ang < -90 else ang
-            if try_label(pt.x, pt.y, short_name(name), rot=ang, size=font[k],
+            if try_label(pt.x, pt.y, short_name(name), rot=0 if ISOM else ang, size=font[k],
                          weight="bold" if k == "motorway" else "normal", halo=1.4):
                 seen[name].append(pt)
                 break
@@ -429,8 +543,11 @@ scale_txt = f"{SCALE:,}".replace(",", ".")
 side.text(0, 0.985, "PETA JAKARTA ORIENTEERING", fontsize=18, weight="bold", va="top")
 side.text(0, 0.94, "DKI JAKARTA", fontsize=26, weight="bold", color=I["brown"], va="top")
 side.text(0, 0.885, f"Skala 1:{scale_txt}", fontsize=11, weight="bold", va="top")
-side.text(0, 0.86, "ISOM 2017, dimodifikasi dan disesuaikan dengan kebutuhan event", fontsize=8.5, color="#555555", va="top")
-TOP = 0.838
+side.text(0, 0.862, "Penerapan simbol mengacu pada IOF ISOM 2017-2 Revision 6 January 2024,\n"
+          "dimodifikasi dan disesuaikan dengan kebutuhan event." if ISOM
+          else "ISOM 2017, dimodifikasi dan disesuaikan dengan kebutuhan event",
+          fontsize=8.5, color="#555555", va="top", linespacing=1.4)
+TOP = 0.828 if ISOM else 0.838
 side.plot([0, 1], [TOP, TOP], color=I["black"], lw=0.8)
 
 ROW = 0.0192 if TRANSIT else 0.026
@@ -468,25 +585,38 @@ if tj:
     row("", "Halte busway")
     side.scatter([0.075], [y], s=34, c="white", edgecolors="black", linewidths=1.3)
     row("", "Halte transit (antarkoridor)")
-area_sample("white", ec="#999999", lw=0.4); row("405", "Area dapat dilalui (permukiman, lahan umum)")
+area_sample("white", ec="#999999", lw=0.4)
+row("405", "Hutan terbuka / area dapat dilalui (permukiman)" if ISOM
+    else "Area dapat dilalui (permukiman, lahan umum)")
 for k, (code, fc, label, _) in LC.items():
     if k == "water":
-        area_sample(fc, ec=I["blue"], lw=0.5)
+        area_sample(fc, ec=I["black"] if ISOM else I["blue"], lw=0.12 * PT if ISOM else 0.5)
+    elif k == "oob" and ISOM:
+        area_sample(fc, ec=I["black"], lw=0.18 * PT)
     else:
         area_sample(fc)
     row(code, label)
-area_sample(I["blue50"]); row("301", "Laut (Teluk Jakarta)")
-line_sample(color=I["blue"], lw=1.4); row("305", "Sungai / kanal")
-for k, code, label in (("motorway", "502", "Jalan tol"), ("trunk", "502", "Jalan arteri utama"),
-                       ("primary", "502", "Jalan arteri / primer"),
-                       ("secondary", "503", "Jalan kolektor / sekunder"),
-                       ("tertiary", "504", "Jalan lokal / tersier")):
+if ISOM:
+    area_sample(I["blue70"], ec=I["black"], lw=0.12 * PT); row("301", "Laut (Teluk Jakarta), biru 70%")
+    line_sample(color=I["blue"], lw=0.3 * PT); row("304", "Sungai / kanal")
+else:
+    area_sample(I["blue50"]); row("301", "Laut (Teluk Jakarta)")
+    line_sample(color=I["blue"], lw=1.4); row("305", "Sungai / kanal")
+ROAD_LEGEND = (("motorway", "502", "Jalan tol"), ("trunk", "502", "Jalan arteri utama"),
+               ("primary", "502", "Jalan arteri / primer"),
+               ("secondary", "503", "Jalan kolektor / sekunder"),
+               ("tertiary", "503" if ISOM else "504", "Jalan lokal / tersier"))
+for k, code, label in ROAD_LEGEND:
     bw, fw, _ = ROAD[k]
-    line_sample(color=I["black"], lw=bw * 1.6)
+    f = 1 if ISOM else 1.6   # ISOM legend shows symbols at their printed size
+    line_sample(color=I["black"], lw=bw * f)
     if fw:
-        line_sample(color=I["brown50"], lw=fw * 1.6)
+        line_sample(color=I["brown50"], lw=fw * f)
     row(code, label)
-if TRANSIT and args.rail_symbol:
+if ISOM:
+    rail_509(side, [0, 0.15], [y, y])
+    row("509", "Rel kereta api (KRL / KA), 200%")
+elif TRANSIT and args.rail_symbol:
     lw, tick, dashes = RAIL_TRACK
     line_sample(color=I["black"], lw=lw)
     side.add_line(Line2D([0, 0.15], [y, y], color=I["black"], lw=tick, linestyle=dashes))
@@ -509,7 +639,7 @@ elif krl:
 line_sample(color=I["black"], lw=1.6, linestyle=(0, (7, 2, 1.5, 2))); row("", "Batas provinsi")
 line_sample(color=I["black"], lw=0.7, linestyle=(0, (5, 2.5)), alpha=0.7)
 row("", "Batas kota administrasi")
-line_sample(color=I["blue"], lw=0.8); row("601", "Garis utara magnetik")
+line_sample(color=I["blue"], lw=0.12 * PT if ISOM else 0.8); row("601", "Garis utara magnetik")
 if tj:
     y -= 0.01
     side.plot([0, 1], [y + 0.012, y + 0.012], color=I["black"], lw=0.5)
@@ -525,7 +655,9 @@ if tj:
                   bbox=dict(boxstyle="round,pad=0.3", fc=r["colour"], ec="none"))
         side.text(x0 + 0.065, yy, r["name"], fontsize=6.6, va="center")
 side.text(0, 0.0, f"Skala 1 : {scale_txt} bila dicetak A3 (420 × 297 mm) ukuran asli\n"
-                  "Data peta © kontributor OpenStreetMap (ODbL) · openstreetmap.org/copyright\n"
+                  + ("Interval kontur: tidak ada (peta tanpa kontur) · "
+                     "Spesifikasi: IOF ISOM 2017-2 (revisi Januari 2024)\n" if ISOM else "")
+                  + "Data peta © kontributor OpenStreetMap (ODbL) · openstreetmap.org/copyright\n"
                   f"Digambar menggunakan: {DRAWN_WITH}\n"
                   f"Oleh: {AUTHOR}",
           fontsize=6.5, color="#666666", va="bottom", linespacing=1.5)

@@ -93,6 +93,19 @@ python3 -m venv .venv
        --transjakarta transjakarta.json --mrt mrt.json --scale 100000 --rail-symbol
    ```
 
+   Opsi `--isom` mengikuti dokumen IOF ISOM 2017-2 (revisi Januari 2024) lebih
+   ketat: kode, warna, dan lebar simbol dalam mm (502/503 jalan, 509 rel kereta
+   — digambar 200% agar menonjol, 301 air bertepi hitam, 304 sungai 0,30 mm,
+   406/408 vegetasi, 520 area tidak boleh dimasuki bertepi hitam, 601 garis
+   utara biru 0,12 mm), teks menghadap utara, serta info interval kontur dan
+   spesifikasi di tepi peta:
+
+   ```bash
+   .venv/bin/python render_orienteering.py jakarta.json output/jakarta-orienteering-100kScale-isom2017-2 \
+       --landcover landcover.json --stations stations.json \
+       --transjakarta transjakarta.json --mrt mrt.json --scale 100000 --isom
+   ```
+
 `fetch_overpass.py` adalah alternatif langkah 1–2 (tanpa busway) lewat Overpass API, tapi
 server Overpass sering timeout untuk area sebesar Jakarta.
 
