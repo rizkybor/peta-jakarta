@@ -6,6 +6,7 @@ Usage: python -I render_orienteering.py <jakarta.json> <out_prefix>
                                         [--stations stations.json]
                                         [--transjakarta transjakarta.json] [--mrt mrt.json]
                                         [--scale 100000] [--rail-symbol] [--isom]
+                                        [--logo logo.png]
 Writes <out_prefix>.pdf (vector) and <out_prefix>.png (300 dpi preview).
 --landcover (from extract_landcover.py) adds open land, vegetation, water and
 restricted areas; --stations (from extract_stations.py) adds KRL / KAI railway stations.
@@ -17,7 +18,7 @@ orienteering base, drawn bold like render.py --style transit (rail too).
 transit layers are on, drawn bold with a white casing.
 --isom follows IOF ISOM 2017-2 (revision January 2024) more strictly: symbol
 codes, colours and line widths in mm, Railway (509), black-edged water (301),
-blue 0.12 mm north lines (601) and north-orientated text.
+blue 0.12 mm north lines (601) and north-orientated text. --logo puts the event logo at the top of the sidebar.
 """
 import argparse
 import json
@@ -46,6 +47,7 @@ ap.add_argument("--mrt")
 ap.add_argument("--scale", type=int, default=125_000)
 ap.add_argument("--rail-symbol", action="store_true")
 ap.add_argument("--isom", action="store_true")
+ap.add_argument("--logo")
 args = ap.parse_args()
 PREFIX = args.prefix
 data = json.load(open(args.src))
@@ -539,15 +541,31 @@ side = fig.add_axes([sx0, 10 / 297, 1 - sx0 - margin, map_h])
 side.axis("off")
 side.set_xlim(0, 1)
 side.set_ylim(0, 1)
+SIDE_W_MM = (1 - sx0 - margin) * 420
 scale_txt = f"{SCALE:,}".replace(",", ".")
-side.text(0, 0.985, "PETA JAKARTA ORIENTEERING", fontsize=18, weight="bold", va="top")
-side.text(0, 0.94, "DKI JAKARTA", fontsize=26, weight="bold", color=I["brown"], va="top")
-side.text(0, 0.885, f"Skala 1:{scale_txt}", fontsize=11, weight="bold", va="top")
-side.text(0, 0.862, "Penerapan simbol mengacu pada IOF ISOM 2017-2 Revision 6 January 2024,\n"
+def from_top(mm):
+    """Sidebar y position (axes fraction) for a distance in mm below its top."""
+    return 1 - mm / MAP_H_MM
+
+
+LOGO_H = 18   # mm
+head = 0
+if args.logo:
+    logo = plt.imread(args.logo)
+    logo_w = LOGO_H * logo.shape[1] / logo.shape[0] / SIDE_W_MM
+    side.imshow(logo, extent=(0, logo_w, from_top(LOGO_H), from_top(0)), aspect="auto",
+                interpolation="antialiased", zorder=1)
+    head = LOGO_H + 3
+side.text(0, from_top(head + 1), "PETA JAKARTA ORIENTEERING", fontsize=18, weight="bold",
+          va="top")
+side.text(0, from_top(head + 7.5), "DKI JAKARTA", fontsize=26, weight="bold", color=I["brown"],
+          va="top")
+side.text(0, from_top(head + 16), f"Skala 1:{scale_txt}", fontsize=11, weight="bold", va="top")
+side.text(0, from_top(head + 21.5), "Penerapan simbol mengacu pada IOF ISOM 2017-2 Revision 6 January 2024,\n"
           "dimodifikasi dan disesuaikan dengan kebutuhan event." if ISOM
           else "ISOM 2017, dimodifikasi dan disesuaikan dengan kebutuhan event",
           fontsize=8.5, color="#555555", va="top", linespacing=1.4)
-TOP = 0.828 if ISOM else 0.838
+TOP = from_top(head + (31 if ISOM else 28))
 side.plot([0, 1], [TOP, TOP], color=I["black"], lw=0.8)
 
 ROW = 0.0192 if TRANSIT else 0.026
@@ -663,7 +681,6 @@ side.text(0, 0.0, f"Skala 1 : {scale_txt} bila dicetak A3 (420 × 297 mm) ukuran
           fontsize=6.5, color="#666666", va="bottom", linespacing=1.5)
 
 # Narrower sidebar (larger scales): shrink its text to fit
-SIDE_W_MM = (1 - sx0 - margin) * 420
 for t in side.texts:
     t.set_fontsize(t.get_fontsize() * min(1, SIDE_W_MM / 116))
 
